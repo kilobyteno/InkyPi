@@ -1,12 +1,9 @@
 import logging
 import base64
 import requests
-from random import choice
 from PIL import Image
 from io import BytesIO
 from plugins.base_plugin.base_plugin import BasePlugin
-from utils.image_utils import pad_image_blur
-from PIL import ImageColor, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -105,22 +102,12 @@ class Dagr(BasePlugin):
             logger.error(f"Failed to decode image: {e}")
             raise RuntimeError(f"Failed to decode image: {str(e)}")
 
-    def generate_settings_template(self):
-        """Generate settings template with API key requirements."""
-        template_params = super().generate_settings_template()
-        template_params['api_key'] = {
-            "required": False,  # We'll use email/activation_code instead
-            "service": "Dagr",
-            "expected_key": "DAGR_API_URL"  # Optional base URL
-        }
-        return template_params
-
-    def generate_image(self, settings, device_config):
-        """Generate image from Dagr device API."""
-        # Get base URL from settings or environment
-        base_url = settings.get('base_url') or device_config.load_env_key("DAGR_API_URL")
+    def validate_and_authenticate(self, settings, device_config):
+        """Validate settings and authenticate with Dagr API. Called when saving settings."""
+        # Get base URL from settings
+        base_url = settings.get('base_url')
         if not base_url:
-            raise RuntimeError("Dagr API base URL is required. Set it in settings or DAGR_API_URL environment variable.")
+            raise RuntimeError("Dagr API base URL is required. Set it in settings.")
 
         # Get device credentials
         email = settings.get('email')
@@ -131,9 +118,35 @@ class Dagr(BasePlugin):
         if not activation_code:
             raise RuntimeError("Device activation code is required.")
 
-        # Authenticate if needed
+        # Authenticate and save tokens
+        self._authenticate(base_url, email, activation_code, settings)
+        logger.info("Successfully authenticated and saved tokens for Dagr plugin")
+
+    def generate_settings_template(self):
+        """Generate settings template with API key requirements."""
+        template_params = super().generate_settings_template()
+        return template_params
+
+    def generate_image(self, settings, device_config):
+        """Generate image from Dagr device API."""
+        # Get base URL from settings
+        base_url = settings.get('base_url')
+        if not base_url:
+            raise RuntimeError("Dagr API base URL is required. Set it in settings.")
+
+        # Check if we have a saved token, if not, authenticate if credentials are present
         if not settings.get("_dagr_access_token"):
-            self._authenticate(base_url, email, activation_code, settings)
+            email = settings.get('email')
+            activation_code = settings.get('activation_code')
+            
+            if email and activation_code:
+                # Authenticate automatically when credentials are present
+                logger.info("No token found, authenticating with provided credentials...")
+                self._authenticate(base_url, email, activation_code, settings)
+                # Note: settings are persisted when device_config.write_config() is called
+                # This happens automatically after generate_image in the refresh task
+            else:
+                raise RuntimeError("Not authenticated. Please provide email and activation code in settings.")
 
         # Fetch images
         images = self._get_images(base_url, settings)
@@ -141,40 +154,12 @@ class Dagr(BasePlugin):
         if not images:
             raise RuntimeError("No images available from Dagr API.")
 
-        # Select image (random or sequential)
-        random_order = settings.get('random_order') == 'true'
-        if random_order:
-            selected_image = choice(images)
-        else:
-            # Use cached index for sequential order
-            index = settings.get("index", 0)
-            selected_image = images[index % len(images)]
-            settings["index"] = (index + 1) % len(images)
+        # Select image sequentially
+        index = settings.get("index", 0)
+        selected_image = images[index % len(images)]
+        settings["index"] = (index + 1) % len(images)
 
-        # Decode and process image
+        # Decode and return image
         img = self._decode_image(selected_image)
-
-        # Handle image padding/scaling
-        if settings.get('padImage') == "true":
-            dimensions = device_config.get_resolution()
-            orientation = device_config.get_config("orientation")
-            
-            if orientation == "vertical":
-                dimensions = dimensions[::-1]
-
-            if settings.get('backgroundOption') == "blur":
-                return pad_image_blur(img, dimensions)
-            else:
-                background_color = ImageColor.getcolor(
-                    settings.get('backgroundColor') or "#ffffff", 
-                    "RGB"
-                )
-                return ImageOps.pad(
-                    img, 
-                    dimensions, 
-                    color=background_color, 
-                    method=Image.Resampling.LANCZOS
-                )
-
         return img
 
