@@ -22,8 +22,8 @@ class Dagr(BasePlugin):
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             data = response.json()
-            access_token = data.get("access_token")
-            refresh_token = data.get("refresh_token")
+            access_token = data.get("data", {}).get("access_token")
+            refresh_token = data.get("data", {}).get("refresh_token")
             if not access_token:
                 raise RuntimeError("Failed to get access token from authentication.")
             # Store tokens in settings for persistence
@@ -48,7 +48,7 @@ class Dagr(BasePlugin):
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             data = response.json()
-            access_token = data.get("access_token")
+            access_token = data.get("data", {}).get("access_token")
             if not access_token:
                 raise RuntimeError("Failed to refresh access token.")
             # Update stored token
@@ -80,7 +80,7 @@ class Dagr(BasePlugin):
                 response = requests.get(url, headers=headers, timeout=30)
             
             response.raise_for_status()
-            images = response.json()
+            images = response.json().get("data", [])
             
             if not images:
                 raise RuntimeError("No images found in device playlist.")
